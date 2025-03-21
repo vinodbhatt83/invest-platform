@@ -1,0 +1,252 @@
+// This file contains the Prisma schema for the document management system
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id                String             @id @default(cuid())
+  name              String?
+  email             String?            @unique
+  emailVerified     DateTime?
+  password         String?
+  image             String?
+  accounts          Account[]
+  sessions          Session[]
+  documents         Document[]
+  documentVersions  DocumentVersion[]  @relation("CreatedBy")
+  documentActivity  DocumentActivity[]
+  documentShares    DocumentShare[]
+  teams             TeamMember[]
+  roles             UserRole[]
+  mappingTemplates  MappingTemplate[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Document {
+  id               String             @id @default(cuid())
+  name             String
+  description      String?
+  fileUrl          String
+  fileType         String
+  fileSize         Int
+  originalFileName String?
+  status           String             @default("pending")
+  property         String?
+  category         String?
+  tags             String[]           @default([])
+  userId           String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  user             User               @relation(fields: [userId], references: [id])
+  mappings         DocumentMapping[]
+  versions         DocumentVersion[]
+  extractedData    ExtractedData?
+  activity         DocumentActivity[]
+  shares           DocumentShare[]
+}
+
+model DocumentActivity {
+  id         String   @id @default(cuid())
+  documentId String
+  userId     String
+  action     String
+  details    String?
+  createdAt  DateTime @default(now())
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id])
+}
+
+model DocumentShare {
+  id         String    @id @default(cuid())
+  documentId String
+  userId     String?
+  teamId     String?
+  permission String    @default("view") // view, edit, admin
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User?     @relation(fields: [userId], references: [id])
+  team       Team?     @relation(fields: [teamId], references: [id])
+
+  @@unique([documentId, userId, teamId])
+}
+
+model Team {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  members     TeamMember[]
+  shares      DocumentShare[]
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  role      String   @default("member") // member, admin
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+}
+
+model ExtractedData {
+  id                String            @id @default(cuid())
+  documentId        String            @unique
+  status            String            @default("pending")
+  confidence        Float             @default(0)
+  error             String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  document          Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  fields            ExtractedField[]
+  documentVersions  DocumentVersion[]
+}
+
+model ExtractedField {
+  id              String        @id @default(cuid())
+  extractedDataId String
+  name            String
+  value           String
+  confidence      Float
+  isValid         Boolean?
+  extractedData   ExtractedData @relation(fields: [extractedDataId], references: [id], onDelete: Cascade)
+}
+
+model TargetSystem {
+  id          String            @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  mappings    DocumentMapping[]
+  templates   MappingTemplate[]
+  fields      TargetField[]
+}
+
+model TargetField {
+  id             String          @id @default(cuid())
+  targetSystemId String
+  name           String
+  description    String?
+  required       Boolean         @default(false)
+  type           String          @default("text")
+  options        String[]        @default([])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  mappingFields  MappingField[]
+  targetSystem   TargetSystem    @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  templateFields TemplateField[]
+}
+
+model DocumentMapping {
+  id             String            @id @default(cuid())
+  documentId     String
+  targetSystemId String
+  name           String?
+  userId         String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  document       Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  targetSystem   TargetSystem      @relation(fields: [targetSystemId], references: [id])
+  fields         MappingField[]
+  documentVersions DocumentVersion[] @relation("MappingVersions")
+  
+  @@unique([documentId, targetSystemId])
+}
+
+model MappingField {
+  id               String          @id @default(cuid())
+  mappingId        String
+  targetFieldId    String
+  extractedFieldId String?
+  mapping          DocumentMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+  targetField      TargetField     @relation(fields: [targetFieldId], references: [id])
+}
+
+model MappingTemplate {
+  id             String          @id @default(cuid())
+  name           String
+  description    String?
+  targetSystemId String
+  userId         String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  targetSystem   TargetSystem    @relation(fields: [targetSystemId], references: [id])
+  user           User?           @relation(fields: [userId], references: [id])
+  fields         TemplateField[]
+}
+
+model TemplateField {
+  id                 String          @id @default(cuid())
+  templateId         String
+  targetFieldId      String
+  extractedFieldName String
+  targetField        TargetField     @relation(fields: [targetFieldId], references: [id])
+  template           MappingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+}
+
+model DocumentVersion {
+  id             String          @id @default(cuid())
+  documentId     String
+  versionType    String
+  contentId      String
+  createdAt      DateTime        @default(now())
+  createdBy      String
+  user           User            @relation("CreatedBy", fields: [createdBy], references: [id])
+  document       Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  extractionData ExtractedData?  @relation(fields: [contentId], references: [id], map: "DocumentVersion_extractionData_fkey")
+  mappingData    DocumentMapping? @relation("MappingVersions", fields: [contentId], references: [id], map: "DocumentVersion_mappingData_fkey")
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  role      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
