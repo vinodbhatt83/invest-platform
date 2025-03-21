@@ -47,12 +47,12 @@ model User {
   accounts          Account[]
   sessions          Session[]
   documents         Document[]
-  documentVersions  DocumentVersion[]  @relation("CreatedBy")
   documentActivity  DocumentActivity[]
   documentShares    DocumentShare[]
   teams             TeamMember[]
   roles             UserRole[]
   mappingTemplates  MappingTemplate[]
+  documentVersions  DocumentVersion[]
 }
 
 model VerificationToken {
@@ -67,10 +67,9 @@ model Document {
   id               String             @id @default(cuid())
   name             String
   description      String?
-  fileUrl          String
-  fileType         String
-  fileSize         Int
   originalFileName String?
+  currentVersionId    String?
+  currentVersionNumber Int      @default(1)
   status           String             @default("pending")
   property         String?
   category         String?
@@ -84,6 +83,12 @@ model Document {
   extractedData    ExtractedData?
   activity         DocumentActivity[]
   shares           DocumentShare[]
+
+  // File-related fields
+  fileName            String    @default("document.txt")
+  fileSize            Int       @default(0)
+  fileType            String    @default("text/plain")
+  fileUrl             String?
 }
 
 model DocumentActivity {
@@ -231,17 +236,36 @@ model TemplateField {
   template           MappingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 }
 
+// Document versions model with added relation fields
 model DocumentVersion {
-  id             String          @id @default(cuid())
-  documentId     String
-  versionType    String
-  contentId      String
-  createdAt      DateTime        @default(now())
-  createdBy      String
-  user           User            @relation("CreatedBy", fields: [createdBy], references: [id])
-  document       Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  extractionData ExtractedData?  @relation(fields: [contentId], references: [id], map: "DocumentVersion_extractionData_fkey")
-  mappingData    DocumentMapping? @relation("MappingVersions", fields: [contentId], references: [id], map: "DocumentVersion_mappingData_fkey")
+  id            String    @id @default(uuid())
+  documentId    String
+  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  content       String    @db.Text
+  comment       String?   @db.Text
+  changes       String?   @db.Text
+  createdAt     DateTime  @default(now())
+  createdById   String
+  createdBy     User      @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  // File-related fields
+  fileName      String
+  fileSize      Int
+  fileType      String
+  fileUrl       String?
+  metadata      Json?
+  
+  // Added relation fields to fix the errors
+  extractedData ExtractedData? @relation(fields: [extractedDataId], references: [id])
+  extractedDataId String?
+  
+  mapping       DocumentMapping? @relation("MappingVersions", fields: [mappingId], references: [id])
+  mappingId     String?
+  
+  @@index([documentId])
+  @@index([createdById])
+  @@unique([documentId, versionNumber])
 }
 
 model UserRole {

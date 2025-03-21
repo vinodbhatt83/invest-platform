@@ -1,80 +1,247 @@
+// components/documents/version-control/VersionCompare.tsx
 import React from 'react';
-import { Card, CardHeader, CardContent, CardTitle } from '../../ui/Card';
-import Button from '../../ui/Button';
-
-interface Version {
-    version: string;
-    date: string;
-    isCurrent: boolean;
-    userId?: string;
-    userName?: string;
-    notes?: string;
-}
+import { diffWords, diffLines } from 'diff';
+import { formatBytes } from "@/lib/utils";
+import { format } from 'date-fns';
+import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FileIcon } from "lucide-react";
 
 interface VersionCompareProps {
-    documentId: string;
-    versions: Version[];
-    selectedVersions: string[];
-    onSelectVersion: (version: string, selected: boolean) => void;
-    onCompare: () => void;
-    className?: string;
+    oldVersion: {
+        versionNumber: number;
+        fileName: string;
+        fileSize: number;
+        fileType: string;
+        content?: string;
+        metadata?: Record<string, any>;
+        createdAt: Date;
+        createdBy: string;
+    };
+    newVersion: {
+        versionNumber: number;
+        fileName: string;
+        fileSize: number;
+        fileType: string;
+        content?: string;
+        metadata?: Record<string, any>;
+        createdAt: Date;
+        createdBy: string;
+    };
+    type?: 'inline' | 'side-by-side' | 'both';
 }
 
 const VersionCompare: React.FC<VersionCompareProps> = ({
-    documentId,
-    versions,
-    selectedVersions,
-    onSelectVersion,
-    onCompare,
-    className = '',
+    oldVersion,
+    newVersion,
+    type = 'both'
 }) => {
-    return (
-        <Card className={className}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-md font-medium">Compare Versions</CardTitle>
-                <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={onCompare}
-                    disabled={selectedVersions.length !== 2}
-                    className="h-8 px-2 text-xs"
-                >
-                    Compare Selected
-                </Button>
-            </CardHeader>
-            <CardContent>
-                <div className="space-y-2">
-                    {versions.length < 2 ? (
-                        <p className="text-sm text-gray-500 italic">Need at least two versions to compare</p>
-                    ) : (
-                        <>
-                            <p className="text-sm text-gray-500 mb-2">Select two versions to compare</p>
-                            {versions.map((version) => (
-                                <div key={version.version} className="flex items-center py-2 border-b border-gray-100 last:border-0">
-                                    <input
-                                        type="checkbox"
-                                        id={`compare-${version.version}`}
-                                        checked={selectedVersions.includes(version.version)}
-                                        onChange={(e) => onSelectVersion(version.version, e.target.checked)}
-                                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                        disabled={selectedVersions.length >= 2 && !selectedVersions.includes(version.version)}
-                                    />
-                                    <label htmlFor={`compare-${version.version}`} className="ml-2 flex-1">
-                                        <div className="flex justify-between">
-                                            <span className="text-sm font-medium">{version.version}</span>
-                                            <span className="text-xs text-gray-500">{version.date}</span>
-                                        </div>
-                                        {version.isCurrent && (
-                                            <span className="text-xs text-green-600">Current version</span>
-                                        )}
-                                    </label>
-                                </div>
-                            ))}
-                        </>
-                    )}
+    // Check if we can do a text-based comparison
+    const canCompareText = () => {
+        return Boolean(
+            oldVersion.content &&
+            newVersion.content &&
+            oldVersion.fileType === newVersion.fileType &&
+            isTextBasedFile(oldVersion.fileType)
+        );
+    };
+
+    // Check if this is a text-based file type
+    const isTextBasedFile = (fileType: string) => {
+        const textTypes = [
+            'text/plain', 'text/csv', 'text/markdown',
+            'application/json', 'application/xml',
+            'text/html', 'text/css', 'text/javascript'
+        ];
+        return textTypes.includes(fileType);
+    };
+
+    // Render metadata comparison for all file types
+    const renderMetadataComparison = () => {
+        const metadataChanges = [];
+
+        // Basic file metadata
+        if (oldVersion.fileName !== newVersion.fileName) {
+            metadataChanges.push({
+                property: 'File Name',
+                oldValue: oldVersion.fileName,
+                newValue: newVersion.fileName
+            });
+        }
+
+        if (oldVersion.fileSize !== newVersion.fileSize) {
+            metadataChanges.push({
+                property: 'File Size',
+                oldValue: formatBytes(oldVersion.fileSize),
+                newValue: formatBytes(newVersion.fileSize)
+            });
+        }
+
+        if (oldVersion.fileType !== newVersion.fileType) {
+            metadataChanges.push({
+                property: 'File Type',
+                oldValue: oldVersion.fileType,
+                newValue: newVersion.fileType
+            });
+        }
+
+        // Extended metadata if available
+        if (oldVersion.metadata && newVersion.metadata) {
+            const allKeys = new Set([
+                ...Object.keys(oldVersion.metadata),
+                ...Object.keys(newVersion.metadata)
+            ]);
+
+            allKeys.forEach(key => {
+                const oldValue = oldVersion.metadata?.[key];
+                const newValue = newVersion.metadata?.[key];
+
+                if (oldValue !== newValue) {
+                    metadataChanges.push({
+                        property: key,
+                        oldValue: oldValue ?? 'N/A',
+                        newValue: newValue ?? 'N/A'
+                    });
+                }
+            });
+        }
+
+        if (metadataChanges.length === 0) {
+            return (
+                <Alert>
+                    <AlertDescription>
+                        No metadata changes detected between versions.
+                    </AlertDescription>
+                </Alert>
+            );
+        }
+
+        return (
+            <div className="border rounded-md p-4">
+                <h3 className="font-medium mb-2">Metadata Changes</h3>
+                <table className="w-full">
+                    <thead>
+                        <tr className="border-b">
+                            <th className="text-left py-2">Property</th>
+                            <th className="text-left py-2">Version {oldVersion.versionNumber}</th>
+                            <th className="text-left py-2">Version {newVersion.versionNumber}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {metadataChanges.map((change, index) => (
+                            <tr key={index} className="border-b">
+                                <td className="py-2 font-medium">{change.property}</td>
+                                <td className="py-2">{String(change.oldValue)}</td>
+                                <td className="py-2">{String(change.newValue)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        );
+    };
+
+    const renderTextDiff = () => {
+        if (!canCompareText()) return null;
+
+        const wordDiff = diffWords(oldVersion.content!, newVersion.content!);
+        const lineDiff = diffLines(oldVersion.content!, newVersion.content!);
+
+        const renderSideBySide = () => (
+            <div className="grid grid-cols-2 gap-4">
+                <div className="border rounded-md p-4 bg-muted/20">
+                    <h3 className="font-medium mb-2">Version {oldVersion.versionNumber}</h3>
+                    <div className="whitespace-pre-wrap">
+                        {lineDiff.map((part, i) => (
+                            <span
+                                key={i}
+                                className={part.added
+                                    ? 'hidden'
+                                    : part.removed
+                                        ? 'bg-red-100 line-through'
+                                        : ''
+                                }
+                            >
+                                {part.value}
+                            </span>
+                        ))}
+                    </div>
                 </div>
-            </CardContent>
-        </Card>
+
+                <div className="border rounded-md p-4 bg-muted/20">
+                    <h3 className="font-medium mb-2">Version {newVersion.versionNumber}</h3>
+                    <div className="whitespace-pre-wrap">
+                        {lineDiff.map((part, i) => (
+                            <span
+                                key={i}
+                                className={part.removed
+                                    ? 'hidden'
+                                    : part.added
+                                        ? 'bg-green-100'
+                                        : ''
+                                }
+                            >
+                                {part.value}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const renderInline = () => (
+            <div className="border rounded-md p-4">
+                <h3 className="font-medium mb-2">Inline Diff</h3>
+                <div className="whitespace-pre-wrap">
+                    {wordDiff.map((part, i) => (
+                        <span
+                            key={i}
+                            className={part.added
+                                ? 'bg-green-100'
+                                : part.removed
+                                    ? 'bg-red-100 line-through'
+                                    : ''
+                            }
+                        >
+                            {part.value}
+                        </span>
+                    ))}
+                </div>
+            </div>
+        );
+
+        return (
+            <div className="space-y-8">
+                {(type === 'side-by-side' || type === 'both') && renderSideBySide()}
+                {(type === 'inline' || type === 'both') && renderInline()}
+            </div>
+        );
+    };
+
+    // Render a message for non-text file types
+    const renderBinaryFilesMessage = () => {
+        if (canCompareText()) return null;
+
+        return (
+            <Alert>
+                <AlertDescription className="flex flex-col gap-1">
+                    <div className="font-medium">
+                        Detailed text comparison is not available for this file type.
+                    </div>
+                    <div>
+                        You can download both versions to compare them using external applications.
+                    </div>
+                </AlertDescription>
+            </Alert>
+        );
+    };
+
+    return (
+        <div className="space-y-8">
+            {renderMetadataComparison()}
+            {renderBinaryFilesMessage()}
+            {renderTextDiff()}
+        </div>
     );
 };
 

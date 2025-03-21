@@ -1,100 +1,165 @@
-import React, { useState } from 'react';
-import { Card, CardHeader, CardContent, CardTitle } from '../../ui/Card';
-import Button from '../../ui/Button';
-import { useNotification } from '../../ui/Notification';
+// components/documents/version-control/VersionActions.tsx
+import React, { useState, useRef } from 'react';
+import { Button } from "@/components/ui/button";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+    History,
+    Upload,
+    ChevronDown,
+    Download,
+    PlusCircle
+} from "lucide-react";
+import CreateVersionDialog from "./CreateVersionDialog";
 
 interface VersionActionsProps {
     documentId: string;
-    currentVersion: string;
-    onCreateVersion: () => void;
-    onCompareVersions: () => void;
-    className?: string;
+    currentFileName: string;
+    currentFileType: string;
+    onShowHistory: () => void;
+    onUploadVersion: (file: File, comment: string) => void;
+    onDownloadCurrent: () => void;
+    isProcessing: boolean;
 }
 
 const VersionActions: React.FC<VersionActionsProps> = ({
     documentId,
-    currentVersion,
-    onCreateVersion,
-    onCompareVersions,
-    className = '',
+    currentFileName,
+    currentFileType,
+    onShowHistory,
+    onUploadVersion,
+    onDownloadCurrent,
+    isProcessing,
 }) => {
-    const [isExporting, setIsExporting] = useState(false);
-    const { showNotification } = useNotification();
+    const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const handleExportVersionHistory = async () => {
-        if (isExporting) return;
+    // Validate that the uploaded file matches the expected type
+    const validateFileType = (file: File): boolean => {
+        // This is a simple validation - you may need more specific rules
+        if (currentFileType.includes('pdf')) {
+            return file.type.includes('pdf');
+        } else if (currentFileType.includes('spreadsheet') || currentFileType.includes('excel')) {
+            return file.type.includes('spreadsheet') ||
+                file.type.includes('excel') ||
+                file.type.includes('csv') ||
+                file.name.endsWith('.xlsx') ||
+                file.name.endsWith('.xls');
+        } else if (currentFileType.includes('document') || currentFileType.includes('word')) {
+            return file.type.includes('document') ||
+                file.type.includes('word') ||
+                file.name.endsWith('.docx') ||
+                file.name.endsWith('.doc');
+        } else if (currentFileType.includes('image')) {
+            return file.type.includes('image');
+        }
 
-        setIsExporting(true);
+        // For other file types, we can check by extension
+        const currentExt = currentFileName.split('.').pop()?.toLowerCase();
+        const newExt = file.name.split('.').pop()?.toLowerCase();
 
-        try {
-            const response = await fetch(`/api/documents/${documentId}/versions/export`);
+        return currentExt === newExt;
+    };
 
-            if (!response.ok) {
-                throw new Error('Failed to export version history');
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!validateFileType(file)) {
+            alert(`Please upload a file of the same type as the current document (${currentFileType}).`);
+            return;
+        }
+
+        setSelectedFile(file);
+        setSaveDialogOpen(true);
+    };
+
+    const handleUploadClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleSaveConfirm = (comment: string) => {
+        if (selectedFile) {
+            onUploadVersion(selectedFile, comment);
+            setSaveDialogOpen(false);
+            setSelectedFile(null);
+
+            // Reset the file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
             }
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `document_${documentId}_version_history.csv`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-
-            showNotification({
-                type: 'success',
-                title: 'Export Complete',
-                message: 'Version history has been exported successfully',
-            });
-        } catch (error) {
-            console.error('Error exporting version history:', error);
-            showNotification({
-                type: 'error',
-                title: 'Export Failed',
-                message: 'Failed to export version history',
-            });
-        } finally {
-            setIsExporting(false);
         }
     };
 
     return (
-        <Card className={className}>
-            <CardHeader className="pb-2">
-                <CardTitle className="text-md font-medium">Version Actions</CardTitle>
-            </CardHeader>
-            <CardContent>
-                <div className="space-y-3">
-                    <Button
-                        onClick={onCreateVersion}
-                        className="w-full justify-center"
-                        size="sm"
-                    >
-                        Create New Version
-                    </Button>
+        <>
+            <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleFileChange}
+            />
 
-                    <Button
-                        onClick={onCompareVersions}
-                        variant="outline"
-                        className="w-full justify-center"
-                        size="sm"
-                    >
-                        Compare Versions
-                    </Button>
+            <div className="flex gap-2">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onShowHistory}
+                    className="flex items-center gap-1"
+                >
+                    <History className="h-4 w-4" />
+                    History
+                </Button>
 
-                    <Button
-                        onClick={handleExportVersionHistory}
-                        variant="outline"
-                        className="w-full justify-center"
-                        size="sm"
-                        isLoading={isExporting}
-                    >
-                        Export Version History
-                    </Button>
-                </div>
-            </CardContent>
-        </Card>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onDownloadCurrent}
+                    className="flex items-center gap-1"
+                >
+                    <Download className="h-4 w-4" />
+                    Download
+                </Button>
+
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button
+                            variant="default"
+                            size="sm"
+                            disabled={isProcessing}
+                            className="flex items-center gap-1"
+                        >
+                            <Upload className="h-4 w-4" />
+                            Upload New Version
+                            <ChevronDown className="h-4 w-4 ml-1" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={handleUploadClick}>
+                            <PlusCircle className="h-4 w-4 mr-2" />
+                            Upload Modified File
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            </div>
+
+            {selectedFile && (
+                <CreateVersionDialog
+                    isOpen={saveDialogOpen}
+                    onClose={() => {
+                        setSaveDialogOpen(false);
+                        setSelectedFile(null);
+                    }}
+                    onSave={handleSaveConfirm}
+                    isSaving={isProcessing}
+                />
+            )}
+        </>
     );
 };
 

@@ -1,96 +1,105 @@
-import React, { useState } from 'react';
-import { useRouter } from 'next/router';
-import { useNotification } from '../../ui/Notification';
+// components/documents/version-control/VersionSelector.tsx
+import React from 'react';
+import { format } from 'date-fns';
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { formatBytes } from "@/lib/utils";
+import { FileIcon, FileTextIcon, FilePdfIcon, FileSpreadsheetIcon, FileImageIcon } from "lucide-react";
 
-interface VersionSelectorProps {
-    documentId: string;
-    currentVersion: string;
-    versions: {
-        version: string;
-        date: string;
-        isCurrent: boolean;
-    }[];
-    onVersionChange: (version: string) => void;
-    className?: string;
+interface DocumentVersion {
+    id: string;
+    versionNumber: number;
+    fileName: string;
+    fileSize: number;
+    fileType: string;
+    createdAt: Date;
+    createdBy: string;
+    comment?: string;
+    changes?: string;
 }
 
+interface VersionSelectorProps {
+    versions: DocumentVersion[];
+    currentVersion: number;
+    selectedVersionId?: string | null;
+    compareVersionId?: string | null;
+    compareMode?: boolean;
+    onSelect: (versionId: string) => void;
+}
+
+// Helper function to get appropriate file icon
+const getFileIcon = (fileType: string) => {
+    if (fileType.includes('pdf')) {
+        return <FilePdfIcon className="h-4 w-4" />;
+    } else if (fileType.includes('spreadsheet') || fileType.includes('excel') || fileType.includes('csv')) {
+        return <FileSpreadsheetIcon className="h-4 w-4" />;
+    } else if (fileType.includes('image')) {
+        return <FileImageIcon className="h-4 w-4" />;
+    } else if (fileType.includes('text') || fileType.includes('document')) {
+        return <FileTextIcon className="h-4 w-4" />;
+    } else {
+        return <FileIcon className="h-4 w-4" />;
+    }
+};
+
 const VersionSelector: React.FC<VersionSelectorProps> = ({
-    documentId,
-    currentVersion,
     versions,
-    onVersionChange,
-    className = '',
+    currentVersion,
+    selectedVersionId,
+    compareVersionId,
+    compareMode = false,
+    onSelect,
 }) => {
-    const [isChanging, setIsChanging] = useState(false);
-    const { showNotification } = useNotification();
-    const router = useRouter();
-
-    const handleVersionChange = async (version: string) => {
-        if (version === currentVersion || isChanging) return;
-
-        setIsChanging(true);
-
-        try {
-            const response = await fetch(`/api/documents/${documentId}/versions`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ version }),
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to change version');
-            }
-
-            showNotification({
-                type: 'success',
-                title: 'Version Changed',
-                message: `Switched to version ${version}`,
-            });
-
-            onVersionChange(version);
-
-            // Refresh the page to show the selected version
-            router.reload();
-        } catch (error) {
-            console.error('Error changing version:', error);
-            showNotification({
-                type: 'error',
-                title: 'Error',
-                message: 'Failed to change document version',
-            });
-        } finally {
-            setIsChanging(false);
-        }
-    };
+    const sortedVersions = [...versions].sort((a, b) => b.versionNumber - a.versionNumber);
 
     return (
-        <div className={`relative ${className}`}>
-            <label htmlFor="version-selector" className="block text-sm font-medium text-gray-700 mb-1">
-                Version
-            </label>
-            <select
-                id="version-selector"
-                value={currentVersion}
-                onChange={(e) => handleVersionChange(e.target.value)}
-                disabled={isChanging || versions.length <= 1}
-                className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-            >
-                {versions.map((version) => (
-                    <option key={version.version} value={version.version}>
-                        {version.version} {version.isCurrent ? '(Current)' : ''}
-                    </option>
-                ))}
-            </select>
-            {isChanging && (
-                <div className="absolute right-2 top-8 h-5 w-5">
-                    <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+        <div className="space-y-2">
+            {sortedVersions.map((version) => (
+                <div
+                    key={version.id}
+                    className={`
+            p-3 border rounded-md cursor-pointer transition-colors
+            ${selectedVersionId === version.id ? 'border-primary bg-primary/5' : ''}
+            ${compareVersionId === version.id ? 'border-blue-500 bg-blue-500/5' : ''}
+          `}
+                    onClick={() => onSelect(version.id)}
+                >
+                    <div className="flex justify-between items-start">
+                        <div>
+                            <div className="font-medium flex items-center gap-2">
+                                Version {version.versionNumber}
+                                {version.versionNumber === currentVersion && (
+                                    <Badge variant="outline">Current</Badge>
+                                )}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                                {format(new Date(version.createdAt), 'PPP p')} by {version.createdBy}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+                        {getFileIcon(version.fileType)}
+                        <span className="truncate" title={version.fileName}>
+                            {version.fileName}
+                        </span>
+                        <span>({formatBytes(version.fileSize)})</span>
+                    </div>
+
+                    {version.comment && (
+                        <div className="mt-2 text-sm">
+                            <p className="text-muted-foreground">{version.comment}</p>
+                        </div>
+                    )}
+
+                    {version.changes && (
+                        <div className="mt-2 text-sm">
+                            <Separator className="my-2" />
+                            <p className="text-muted-foreground italic">Changes: {version.changes}</p>
+                        </div>
+                    )}
                 </div>
-            )}
+            ))}
         </div>
     );
 };
