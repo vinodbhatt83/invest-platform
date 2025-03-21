@@ -1,35 +1,143 @@
 import Queue from 'bull';
-import Redis from 'ioredis';
+import { Redis } from '@upstash/redis';
 
-// Set up Redis connection options
-const redisOptions = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD,
-  maxRetriesPerRequest: null,
-};
+// Create Upstash Redis client instances
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL || '',
+  token: process.env.UPSTASH_REDIS_REST_TOKEN || '',
+});
 
-// Create Redis client instances
-const redisClient = new Redis(redisOptions);
-const redisSubscriber = new Redis(redisOptions);
-
+// Since Upstash doesn't directly support Bull, we'll need to use a custom adapter approach
 // Define queue names
 const QUEUE_NAMES = {
   DOCUMENT_PROCESSING: 'document-processing',
 };
 
-// Create the queues
-const documentProcessingQueue = new Queue(QUEUE_NAMES.DOCUMENT_PROCESSING, {
-  createClient: (type) => {
-    switch (type) {
-      case 'client':
-        return redisClient;
-      case 'subscriber':
-        return redisSubscriber;
-      default:
-        return new Redis(redisOptions);
+// Create a lightweight queue implementation using Upstash REST API
+class UpstashQueue {
+  queueName: string;
+  options: any;
+
+  constructor(queueName: string, options: any = {}) {
+    this.queueName = queueName;
+    this.options = options;
+  }
+
+  async add(data: any, options: any = {}): Promise<any> {
+    const jobId = `${this.queueName}:job:${Date.now()}:${Math.random().toString(36).substring(2, 10)}`;
+    
+    const jobData = {
+      id: jobId,
+      data,
+      options: { ...this.options.defaultJobOptions, ...options },
+      status: 'waiting',
+      createdAt: Date.now(),
+      attempts: 0,
+      maxAttempts: options.attempts || this.options.defaultJobOptions.attempts || 3,
+    };
+    
+    // Store job data in Redis
+    await redis.hset(jobId, jobData);
+    
+    // Add job ID to the queue
+    await redis.lpush(`queue:${this.queueName}`, jobId);
+    
+    return jobData;
+  }
+
+  async process(processor: (job: any) => Promise<any>): Promise<void> {
+    // This would typically run in a worker process
+    // For simplicity, we'll just implement a basic polling mechanism
+    
+    // In production, you'd want to use a proper worker setup
+    // This is a simplified example
+    setInterval(async () => {
+      // Get next job from queue
+      const jobId = await redis.rpop(`queue:${this.queueName}`);
+      
+      if (jobId) {
+        try {
+          // Get job data
+          const jobData = await redis.hgetall(jobId);
+          
+          if (!jobData) return;
+          
+          // Update job status
+          await redis.hset(jobId, { status: 'processing' });
+          
+          // Process job
+          const result = await processor(jobData);
+          
+          // Update job with result
+          await redis.hset(jobId, {
+            status: 'completed',
+            completedAt: Date.now(),
+            result: JSON.stringify(result)
+          });
+          
+          // Emit completed event
+          this.emit('completed', jobData, result);
+          
+        } catch (error) {
+          console.error(`Error processing job ${jobId}:`, error);
+          
+          // Get job data
+          const jobData = await redis.hgetall(jobId);
+          
+          if (!jobData) return;
+          
+          // Increment attempts
+          const attempts = parseInt(String(jobData.attempts || '0')) + 1;
+          
+          if (attempts < parseInt(String(jobData.maxAttempts || '3'))) {
+            // Retry job
+            await redis.hset(jobId, {
+              status: 'waiting',
+              attempts,
+              lastError: error.message
+            });
+            
+            // Add back to queue
+            await redis.lpush(`queue:${this.queueName}`, jobId);
+          } else {
+            // Mark as failed
+            await redis.hset(jobId, {
+              status: 'failed',
+              failedAt: Date.now(),
+              attempts,
+              lastError: error.message
+            });
+            
+            // Emit failed event
+            this.emit('failed', jobData, error);
+          }
+        }
+      }
+    }, 1000); // Poll every second
+  }
+
+  // Simple event emitter implementation
+  private eventHandlers: Record<string, Function[]> = {};
+
+  on(event: string, handler: Function): void {
+    if (!this.eventHandlers[event]) {
+      this.eventHandlers[event] = [];
     }
-  },
+    this.eventHandlers[event].push(handler);
+  }
+
+  emit(event: string, ...args: any[]): void {
+    const handlers = this.eventHandlers[event] || [];
+    handlers.forEach(handler => handler(...args));
+  }
+
+  async close(): Promise<void> {
+    // Nothing to close with Upstash REST API
+  }
+}
+
+// Create the queues
+const documentProcessingQueue = new UpstashQueue(QUEUE_NAMES.DOCUMENT_PROCESSING, {
   defaultJobOptions: {
     attempts: 3,
     backoff: {
@@ -42,20 +150,13 @@ const documentProcessingQueue = new Queue(QUEUE_NAMES.DOCUMENT_PROCESSING, {
 });
 
 // Map of all queues
-const queues: Record<string, Queue.Queue> = {
+const queues: Record<string, UpstashQueue> = {
   [QUEUE_NAMES.DOCUMENT_PROCESSING]: documentProcessingQueue,
 };
 
-// Queue service
+// Queue service (keep the same interface for compatibility)
 export const queueService = {
-  /**
-   * Add a job to the specified queue
-   * @param queueName Name of the queue
-   * @param data Job data
-   * @param options Job options
-   * @returns The created job
-   */
-  async addToQueue(queueName: string, data: any, options?: Queue.JobOptions): Promise<Queue.Job> {
+  async addToQueue(queueName: string, data: any, options?: any): Promise<any> {
     const queue = queues[queueName];
     if (!queue) {
       throw new Error(`Queue ${queueName} does not exist`);
@@ -64,12 +165,7 @@ export const queueService = {
     return await queue.add(data, options);
   },
 
-  /**
-   * Get a queue by name
-   * @param queueName Name of the queue
-   * @returns The queue instance
-   */
-  getQueue(queueName: string): Queue.Queue {
+  getQueue(queueName: string): any {
     const queue = queues[queueName];
     if (!queue) {
       throw new Error(`Queue ${queueName} does not exist`);
@@ -77,25 +173,16 @@ export const queueService = {
     return queue;
   },
 
-  /**
-   * Set up a processor for the document processing queue
-   * @param processor Function to process jobs
-   */
-  setupDocumentProcessor(processor: (job: Queue.Job) => Promise<any>): void {
+  setupDocumentProcessor(processor: (job: any) => Promise<any>): void {
     documentProcessingQueue.process(processor);
   },
 
-  /**
-   * Set up event handlers for a queue
-   * @param queueName Name of the queue
-   * @param handlers Object with event handler functions
-   */
   setupQueueHandlers(
     queueName: string,
     handlers: {
-      completed?: (job: Queue.Job, result: any) => void;
-      failed?: (job: Queue.Job, error: Error) => void;
-      progress?: (job: Queue.Job, progress: number) => void;
+      completed?: (job: any, result: any) => void;
+      failed?: (job: any, error: Error) => void;
+      progress?: (job: any, progress: number) => void;
     }
   ): void {
     const queue = this.getQueue(queueName);
@@ -113,13 +200,8 @@ export const queueService = {
     }
   },
 
-  /**
-   * Close all queue connections
-   */
   async closeAll(): Promise<void> {
     await Promise.all(Object.values(queues).map((queue) => queue.close()));
-    await redisClient.quit();
-    await redisSubscriber.quit();
   },
 };
 
